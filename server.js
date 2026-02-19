@@ -435,6 +435,49 @@ app.delete('/api/reset', async (req, res) => {
 // ─────────────────────────────────────────
 //  START SERVER
 // ─────────────────────────────────────────
+// ─────────────────────────────────────────
+//  AUTO PRIORITY BOOST — runs every 3 minutes
+//  No button click needed — server does it automatically
+// ─────────────────────────────────────────
+async function runAutoPriorityBoost() {
+    const queue = globalTree.getQueue();
+    if (queue.length === 0) return;
+
+    let boostedCount = 0;
+
+    for (const vehicle of queue) {
+        const waitMinutes = (Date.now() - new Date(vehicle.arrival_time).getTime()) / 60000;
+        const boost = Math.floor(waitMinutes / 3);         // 1 level per 3 mins waited
+        const newPriority = Math.max(1, vehicle.priority - boost); // never below P1
+
+        if (newPriority < vehicle.priority) {
+            // ── Remove from both trees at OLD priority ──
+            globalTree.deleteVehicle(vehicle);
+            const lt = laneTrees[vehicle.lane_number];
+            if (lt) lt.deleteVehicle(vehicle);
+
+            // ── Re-insert at NEW (boosted) priority ──
+            const boosted = { ...vehicle, priority: newPriority };
+            globalTree.insertVehicle(boosted);
+            if (lt) lt.insertVehicle(boosted);
+
+            // ── Persist to DB + log ──
+            try {
+                await db.updateVehiclePriority(vehicle.id, newPriority);
+                await db.addLog(vehicle.id, 'PRIORITY_BOOSTED',
+                    `Auto-boost: ${vehicle.vehicle_number} P${vehicle.priority} → P${newPriority} | waited ${waitMinutes.toFixed(1)} min`);
+            } catch (e) { /* DB optional */ }
+
+            boostedCount++;
+            console.log(`  [Auto-Boost] ${vehicle.vehicle_number} (${vehicle.vehicle_type}): P${vehicle.priority} → P${newPriority} | waited ${waitMinutes.toFixed(1)} min`);
+        }
+    }
+
+    if (boostedCount > 0) {
+        console.log(`[Auto-Boost] ${boostedCount} vehicle(s) boosted at ${new Date().toLocaleTimeString('en-IN')}`);
+    }
+}
+
 initSystem().then(() => {
     app.listen(PORT, () => {
         console.log(`\n🚦 Smart Traffic Management System`);
@@ -442,6 +485,14 @@ initSystem().then(() => {
         console.log(`🌐 Dashboard: http://localhost:${PORT}`);
         console.log(`📡 API Base:  http://localhost:${PORT}/api`);
         console.log(`🌳 AVL Tree:  http://localhost:${PORT}/api/tree`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(`⚡ Auto-Boost: Every 3 minutes (server-side)`);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
     });
+
+    // Fire immediately once on startup (catches vehicles from previous session)
+    runAutoPriorityBoost();
+
+    // Then repeat every 3 minutes
+    setInterval(runAutoPriorityBoost, 3 * 60 * 1000);
 });
