@@ -20,8 +20,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─────────────────────────────────────────
-//  GLOBAL AVL TREE INSTANCE
-//  One tree per lane (4 lanes)
+//  AVL TREE INSTANCES
+//  One tree per lane (4 lanes) + one global
 // ─────────────────────────────────────────
 const laneTrees = {
     1: new AVLTree(),
@@ -30,10 +30,9 @@ const laneTrees = {
     4: new AVLTree()
 };
 
-// Global merged tree for overall priority view
 const globalTree = new AVLTree();
 
-// Vehicle type → priority mapping
+// Vehicle type → priority mapping (lower = higher urgency)
 const PRIORITY_MAP = {
     'Ambulance': 1,
     'Fire Truck': 2,
@@ -52,8 +51,11 @@ const PRIORITY_LABEL = {
     6: 'NORMAL'
 };
 
+// Plate format: 2 letters · 2 digits · 2 letters · 4 digits
+const PLATE_REGEX = /^[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}$/;
+
 // ─────────────────────────────────────────
-//  INITIALIZE: Load waiting vehicles into AVL trees on startup
+//  INIT: Load waiting vehicles from DB into AVL trees on startup
 // ─────────────────────────────────────────
 async function initSystem() {
     try {
@@ -85,7 +87,6 @@ app.get('/api/health', async (req, res) => {
 
 // ─────────────────────────────────────────
 //  ADD VEHICLE — POST /api/vehicles
-//  Inserts into AVL tree + PostgreSQL
 // ─────────────────────────────────────────
 app.post('/api/vehicles', async (req, res) => {
     try {
@@ -95,8 +96,7 @@ app.post('/api/vehicles', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields: vehicle_number, vehicle_type, lane_number' });
         }
 
-        // ── Plate format: 2 letters · 2 digits · 2 letters · 4 digits ──────
-        const PLATE_REGEX = /^[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}$/;
+        // ── Plate format validation ──────────────────────────────────────────
         const cleanNum = vehicle_number.toUpperCase().trim();
         if (cleanNum.length !== 10 || !PLATE_REGEX.test(cleanNum)) {
             return res.status(400).json({
@@ -104,7 +104,7 @@ app.post('/api/vehicles', async (req, res) => {
             });
         }
 
-        // ── Uniqueness: reject if already waiting in the queue ───────────────
+        // ── Uniqueness check against live AVL queue ──────────────────────────
         const currentQueue = globalTree.getQueue();
         const duplicate = currentQueue.find(v => v.vehicle_number === cleanNum);
         if (duplicate) {
@@ -120,7 +120,7 @@ app.post('/api/vehicles', async (req, res) => {
 
         const priority = PRIORITY_MAP[vehicle_type];
         if (!priority) {
-            return res.status(400).json({ error: `Unknown vehicle type. Valid types: ${Object.keys(PRIORITY_MAP).join(', ')}` });
+            return res.status(400).json({ error: `Unknown vehicle type. Valid: ${Object.keys(PRIORITY_MAP).join(', ')}` });
         }
 
         const vehicleData = {
@@ -132,7 +132,7 @@ app.post('/api/vehicles', async (req, res) => {
             status: 'waiting'
         };
 
-        // Save to PostgreSQL (get ID back)
+        // Save to PostgreSQL
         let savedVehicle = vehicleData;
         let dbSaved = false;
         try {
@@ -141,12 +141,11 @@ app.post('/api/vehicles', async (req, res) => {
             await db.addLog(savedVehicle.id, 'VEHICLE_ADDED',
                 `${vehicle_type} ${savedVehicle.vehicle_number} added to Lane ${lane} | Priority: ${priority} (${PRIORITY_LABEL[priority]})`);
         } catch (dbErr) {
-            // DB unavailable — use in-memory only with a temp ID
             savedVehicle = { ...vehicleData, id: Date.now() };
             console.warn('DB write failed, using in-memory:', dbErr.message);
         }
 
-        // Insert into AVL trees (lane-specific + global)
+        // Insert into AVL trees
         laneTrees[lane].insertVehicle(savedVehicle);
         globalTree.insertVehicle(savedVehicle);
 
@@ -157,7 +156,7 @@ app.post('/api/vehicles', async (req, res) => {
             treeHeight: globalTree.getHeight(),
             treeSize: globalTree.getSize(),
             rotations: globalTree.rotationCount,
-            message: `✅ ${vehicle_type} ${savedVehicle.vehicle_number} added to Lane ${lane} — Priority ${priority} (${PRIORITY_LABEL[priority]})`
+            message: `${vehicle_type} ${savedVehicle.vehicle_number} added to Lane ${lane} — Priority ${priority} (${PRIORITY_LABEL[priority]})`
         });
 
     } catch (err) {
@@ -168,23 +167,17 @@ app.post('/api/vehicles', async (req, res) => {
 
 // ─────────────────────────────────────────
 //  SIGNAL GREEN — DELETE /api/vehicles/remove
-//  Removes highest priority vehicle from queue
 // ─────────────────────────────────────────
 app.delete('/api/vehicles/remove', async (req, res) => {
     try {
         const { lane } = req.query;
-
         let removedVehicle = null;
 
         if (lane) {
-            // Remove from specific lane
             const laneNum = parseInt(lane);
             removedVehicle = laneTrees[laneNum]?.removeHighestPriority() || null;
-            if (removedVehicle) {
-                globalTree.deleteVehicle(removedVehicle);
-            }
+            if (removedVehicle) globalTree.deleteVehicle(removedVehicle);
         } else {
-            // Remove globally highest priority vehicle across all lanes
             removedVehicle = globalTree.removeHighestPriority();
             if (removedVehicle) {
                 const laneTree = laneTrees[removedVehicle.lane_number];
@@ -196,11 +189,10 @@ app.delete('/api/vehicles/remove', async (req, res) => {
             return res.status(404).json({ error: 'No vehicles in queue' });
         }
 
-        // Update DB
         try {
             await db.updateVehicleStatus(removedVehicle.id, 'passed');
             await db.addLog(removedVehicle.id, 'SIGNAL_GREEN',
-                `🟢 ${removedVehicle.vehicle_type} ${removedVehicle.vehicle_number} PASSED — Lane ${removedVehicle.lane_number} | Priority was ${removedVehicle.priority}`);
+                `${removedVehicle.vehicle_type} ${removedVehicle.vehicle_number} PASSED — Lane ${removedVehicle.lane_number} | Priority was ${removedVehicle.priority}`);
         } catch (dbErr) {
             console.warn('DB update failed:', dbErr.message);
         }
@@ -209,7 +201,7 @@ app.delete('/api/vehicles/remove', async (req, res) => {
             success: true,
             vehicle: removedVehicle,
             treeSize: globalTree.getSize(),
-            message: `🟢 Signal Green! ${removedVehicle.vehicle_type} ${removedVehicle.vehicle_number} has passed.`
+            message: `Signal Green! ${removedVehicle.vehicle_type} ${removedVehicle.vehicle_number} has passed.`
         });
 
     } catch (err) {
@@ -219,22 +211,20 @@ app.delete('/api/vehicles/remove', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
-//  SEARCH VEHICLE — GET /api/vehicles/search?number=TN01AB1234
+//  SEARCH VEHICLE — GET /api/vehicles/search?number=
 // ─────────────────────────────────────────
 app.get('/api/vehicles/search', (req, res) => {
     try {
         const { number } = req.query;
         if (!number) return res.status(400).json({ error: 'Query param ?number= required' });
 
-        const vehicle = globalTree.search(number);
+        const vehicle = globalTree.search(number.toUpperCase().trim());
 
         if (!vehicle) {
             return res.status(404).json({ found: false, message: `Vehicle ${number.toUpperCase()} not found in queue` });
         }
 
-        // Calculate wait time
         const waitMinutes = (Date.now() - new Date(vehicle.arrival_time).getTime()) / 60000;
-
         res.json({
             found: true,
             vehicle,
@@ -248,8 +238,7 @@ app.get('/api/vehicles/search', (req, res) => {
 });
 
 // ─────────────────────────────────────────
-//  GET CURRENT QUEUE — GET /api/queue
-//  Returns in-order traversal (sorted by priority)
+//  GET QUEUE — GET /api/queue
 // ─────────────────────────────────────────
 app.get('/api/queue', (req, res) => {
     const { lane } = req.query;
@@ -261,7 +250,6 @@ app.get('/api/queue', (req, res) => {
         queue = globalTree.getQueue();
     }
 
-    // Enrich with wait time
     queue = queue.map(v => ({
         ...v,
         wait_minutes: ((Date.now() - new Date(v.arrival_time).getTime()) / 60000).toFixed(1),
@@ -273,17 +261,12 @@ app.get('/api/queue', (req, res) => {
 
 // ─────────────────────────────────────────
 //  GET AVL TREE STRUCTURE — GET /api/tree
-//  Used by D3.js for visualization
 // ─────────────────────────────────────────
 app.get('/api/tree', (req, res) => {
     const { lane } = req.query;
-    let tree;
-
-    if (lane && laneTrees[parseInt(lane)]) {
-        tree = laneTrees[parseInt(lane)].getTree();
-    } else {
-        tree = globalTree.getTree();
-    }
+    const tree = (lane && laneTrees[parseInt(lane)])
+        ? laneTrees[parseInt(lane)].getTree()
+        : globalTree.getTree();
 
     const analytics = globalTree.getAnalytics();
     res.json({ tree, analytics });
@@ -328,12 +311,8 @@ app.get('/api/stats', async (req, res) => {
         const queue = globalTree.getQueue();
         const emergencyInQueue = queue.filter(v => v.priority <= 3).length;
 
-        // Find busiest lane
         const laneMap = {};
-        [1, 2, 3, 4].forEach(l => {
-            const count = laneTrees[l].getSize();
-            laneMap[l] = count;
-        });
+        [1, 2, 3, 4].forEach(l => { laneMap[l] = laneTrees[l].getSize(); });
         const busiestLane = Object.entries(laneMap).sort((a, b) => b[1] - a[1])[0];
 
         res.json({
@@ -358,7 +337,6 @@ app.get('/api/stats', async (req, res) => {
 
 // ─────────────────────────────────────────
 //  DYNAMIC PRIORITY UPDATE — POST /api/vehicles/update-priority
-//  Boosts priority for vehicles waiting too long (anti-starvation)
 // ─────────────────────────────────────────
 app.post('/api/vehicles/update-priority', async (req, res) => {
     try {
@@ -367,19 +345,18 @@ app.post('/api/vehicles/update-priority', async (req, res) => {
 
         for (const vehicle of queue) {
             const waitMinutes = (Date.now() - new Date(vehicle.arrival_time).getTime()) / 60000;
-            const boost = Math.floor(waitMinutes / 3); // +1 boost per 3 minutes waiting
+            const boost = Math.floor(waitMinutes / 3);
             const newPriority = Math.max(1, vehicle.priority - boost);
 
             if (newPriority < vehicle.priority) {
-                // Remove old and reinsert with new priority
                 globalTree.deleteVehicle(vehicle);
-                const boostedVehicle = { ...vehicle, priority: newPriority };
-                globalTree.insertVehicle(boostedVehicle);
+                const boosted = { ...vehicle, priority: newPriority };
+                globalTree.insertVehicle(boosted);
 
                 const laneTree = laneTrees[vehicle.lane_number];
                 if (laneTree) {
                     laneTree.deleteVehicle(vehicle);
-                    laneTree.insertVehicle(boostedVehicle);
+                    laneTree.insertVehicle(boosted);
                 }
 
                 try {
@@ -402,7 +379,7 @@ app.post('/api/vehicles/update-priority', async (req, res) => {
             updated: updated.length,
             changes: updated,
             message: updated.length
-                ? `✨ ${updated.length} vehicle(s) had priority boosted`
+                ? `${updated.length} vehicle(s) had priority boosted`
                 : 'No priority updates needed'
         });
 
@@ -435,7 +412,7 @@ app.delete('/api/lane/:number', async (req, res) => {
         res.json({
             success: true,
             cleared: laneQueue.length,
-            message: `🧹 Lane ${laneNum} cleared — ${laneQueue.length} vehicle(s) removed`
+            message: `Lane ${laneNum} cleared — ${laneQueue.length} vehicle(s) removed`
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -449,7 +426,7 @@ app.delete('/api/reset', async (req, res) => {
     try {
         Object.values(laneTrees).forEach(t => t.clear());
         globalTree.clear();
-        res.json({ success: true, message: '♻️ System reset. All queues cleared.' });
+        res.json({ success: true, message: 'System reset. All queues cleared.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

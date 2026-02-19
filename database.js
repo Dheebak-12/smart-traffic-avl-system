@@ -122,13 +122,6 @@ async function getWaitingVehicles() {
     return result.rows;
 }
 
-async function getVehicleByNumber(vehicleNumber) {
-    const result = await pool.query(
-        'SELECT * FROM vehicles WHERE vehicle_number = $1 ORDER BY created_at DESC LIMIT 1',
-        [vehicleNumber.toUpperCase().trim()]
-    );
-    return result.rows[0] || null;
-}
 
 // ─────────────────────────────────────────
 //  LOG OPERATIONS
@@ -214,7 +207,6 @@ module.exports = {
     updateVehiclePriority,
     getAllVehicles,
     getWaitingVehicles,
-    getVehicleByNumber,
     addLog,
     getLogs,
     getStats,

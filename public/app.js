@@ -12,14 +12,24 @@ let currentQueueView = 'all';
 let refreshInterval = null;
 const API = '';   // Same origin
 
-// Vehicle type → icon mapping
+// Vehicle type → SVG icon (matches sprite in index.html)
 const TYPE_ICON = {
-    'Ambulance': '🚑',
-    'Fire Truck': '🚒',
-    'Police': '🚓',
-    'Bus': '🚌',
-    'Car': '🚗',
-    'Bike': '🏍️'
+    'Ambulance': '<svg width="16" height="16" style="vertical-align:-3px"><use href="#icon-ambulance"/></svg>',
+    'Fire Truck': '<svg width="16" height="16" style="vertical-align:-3px;color:#ff6b35"><use href="#icon-fire"/></svg>',
+    'Police': '<svg width="16" height="16" style="vertical-align:-3px;color:#748ffc"><use href="#icon-police"/></svg>',
+    'Bus': '<svg width="16" height="16" style="vertical-align:-3px;color:#ffa502"><use href="#icon-bus"/></svg>',
+    'Car': '<svg width="16" height="16" style="vertical-align:-3px;color:#2ed573"><use href="#icon-car"/></svg>',
+    'Bike': '<svg width="16" height="16" style="vertical-align:-3px;color:#1e90ff"><use href="#icon-bike"/></svg>'
+};
+
+// For D3 canvas we keep a text-only label (SVG can't go inside SVG text elements easily)
+const TYPE_LABEL = {
+    'Ambulance': 'AMB',
+    'Fire Truck': 'FIR',
+    'Police': 'POL',
+    'Bus': 'BUS',
+    'Car': 'CAR',
+    'Bike': 'BIK'
 };
 
 // Vehicle type → D3 node color
@@ -137,10 +147,10 @@ function validatePlate(raw) {
 
     // Duplicate check against live queue
     if (_queueNumbers.has(val)) {
-        return { ok: false, msg: `⚠️ ${val} is already in the queue!`, type: 'err' };
+        return { ok: false, msg: `${val} is already in the queue!`, type: 'err' };
     }
 
-    return { ok: true, msg: `✔ ${val} — valid plate number`, type: 'ok' };
+    return { ok: true, msg: `${val} — valid plate number`, type: 'ok' };
 }
 
 /**
@@ -182,13 +192,13 @@ _plateInput.addEventListener('input', () => {
         _plateIcon.textContent = '';
     } else if (result.type === 'ok') {
         _plateInput.classList.add('input-valid');
-        _plateIcon.textContent = '✅';
+        _plateIcon.innerHTML = '<svg width="14" height="14" style="color:var(--success)"><use href="#icon-check-circle"/></svg>';
     } else if (result.type === 'err') {
         _plateInput.classList.add('input-invalid');
-        _plateIcon.textContent = '❌';
+        _plateIcon.innerHTML = '<svg width="14" height="14" style="color:var(--danger)"><use href="#icon-alert"/></svg>';
     } else {
         // warn / info — partial
-        _plateIcon.textContent = '✏️';
+        _plateIcon.innerHTML = '<svg width="13" height="13" style="color:var(--warning)"><use href="#icon-bolt"/></svg>';
     }
 
     // Update message
@@ -227,9 +237,9 @@ document.getElementById('add-vehicle-form').addEventListener('submit', async (e)
     if (!plateCheck.ok) {
         // Shake the input and show message
         _plateInput.classList.remove('input-invalid');
-        void _plateInput.offsetWidth; // reflow to restart animation
+        void _plateInput.offsetWidth;
         _plateInput.classList.add('input-invalid');
-        _plateIcon.textContent = '❌';
+        _plateIcon.innerHTML = '<svg width="14" height="14" style="color:var(--danger)"><use href="#icon-alert"/></svg>';
         _plateMsg.className = 'validation-msg msg-err';
         _plateMsg.textContent = plateCheck.msg;
         showToast(`Invalid plate: ${plateCheck.msg}`, 'error');
@@ -258,10 +268,10 @@ document.getElementById('add-vehicle-form').addEventListener('submit', async (e)
         // Could be server-side duplicate / format rejection
         showToast(`Error: ${err.message}`, 'error');
         _plateInput.classList.add('input-invalid');
-        _plateIcon.textContent = '❌';
+        _plateIcon.innerHTML = '<svg width="14" height="14" style="color:var(--danger)"><use href="#icon-alert"/></svg>';
     } finally {
         btn.classList.remove('loading');
-        btn.innerHTML = '<span class="btn-icon">🌱</span> Add to AVL Queue';
+        btn.innerHTML = '<svg width="16" height="16"><use href="#icon-seed"/></svg> Add to AVL Queue';
     }
 });
 
@@ -284,7 +294,7 @@ async function signalGreen(lane = null) {
         await refreshAll();
 
     } catch (err) {
-        showToast(`⚠️ ${err.message}`, 'warning');
+        showToast(err.message, 'warning');
     } finally {
         btn.classList.remove('loading');
     }
@@ -302,7 +312,7 @@ async function searchVehicle() {
     if (!number) { showToast('Enter a vehicle number to search', 'warning'); return; }
 
     resultDiv.className = 'search-result';
-    resultDiv.innerHTML = '🔍 Searching...';
+    resultDiv.innerHTML = '<span style="color:var(--text-muted)">Searching…</span>';
 
     try {
         const res = await fetch(`${API}/api/vehicles/search?number=${encodeURIComponent(number)}`);
@@ -310,7 +320,7 @@ async function searchVehicle() {
 
         if (!data.found) {
             resultDiv.className = 'search-result not-found';
-            resultDiv.innerHTML = `<strong>❌ Not Found</strong><br>${data.message}`;
+            resultDiv.innerHTML = `<strong>Not Found</strong><br>${data.message}`;
         } else {
             const v = data.vehicle;
             resultDiv.className = 'search-result found';
@@ -346,7 +356,7 @@ async function updatePriorities() {
         showToast(`Error: ${err.message}`, 'error');
     } finally {
         btn.classList.remove('loading');
-        btn.innerHTML = '🔥 Dynamic Priority Boost';
+        btn.innerHTML = '<svg width="16" height="16"><use href="#icon-flame"/></svg> Dynamic Priority Boost';
     }
 }
 
@@ -413,7 +423,9 @@ function renderTree(treeData, analytics) {
     if (!treeData) {
         container.innerHTML = `
       <div class="tree-empty">
-        <div class="tree-empty-icon">🌱</div>
+        <div class="tree-empty-icon">
+          <svg width="52" height="52" style="opacity:.35;color:var(--primary)"><use href="#icon-tree"/></svg>
+        </div>
         <p>AVL Tree is empty — Add vehicles to see the tree</p>
       </div>`;
         return;
@@ -491,7 +503,7 @@ function renderTree(treeData, analytics) {
             if (!d.data.vehicle) return;
             const v = d.data.vehicle;
             tooltip.style('display', 'block').html(`
-        <strong style="color:${TYPE_COLOR[v.vehicle_type]}">${TYPE_ICON[v.vehicle_type] || '🚗'} ${v.vehicle_number}</strong><br>
+        <strong style="color:${TYPE_COLOR[v.vehicle_type]}">${TYPE_ICON[v.vehicle_type] || ''} ${v.vehicle_number}</strong><br>
         Type: ${v.vehicle_type}<br>
         Priority: P${v.priority}<br>
         Lane: ${v.lane_number}<br>
@@ -507,13 +519,17 @@ function renderTree(treeData, analytics) {
         })
         .on('mouseleave', () => { tooltip.style('display', 'none'); });
 
-    /* Vehicle icon (emoji) inside node */
+    /* Vehicle type label inside node (text, not emoji — stays crisp in SVG) */
     node.append('text')
         .attr('y', -4)
         .attr('text-anchor', 'middle')
         .attr('dominant-baseline', 'middle')
-        .attr('font-size', '14px')
-        .text(d => d.data.vehicle ? (TYPE_ICON[d.data.vehicle.vehicle_type] || '') : '');
+        .attr('font-size', '8px')
+        .attr('font-weight', '800')
+        .attr('fill', 'rgba(255,255,255,0.90)')
+        .attr('font-family', 'JetBrains Mono, monospace')
+        .attr('letter-spacing', '0.5')
+        .text(d => d.data.vehicle ? (TYPE_LABEL[d.data.vehicle.vehicle_type] || 'VEH') : '');
 
     /* Priority under icon */
     node.append('text')
@@ -570,7 +586,7 @@ function renderQueue(queue) {
     list.innerHTML = queue.map((v, i) => `
     <div class="queue-item">
       <span class="queue-rank">#${i + 1}</span>
-      <span class="queue-type-icon">${TYPE_ICON[v.vehicle_type] || '🚗'}</span>
+      <span class="queue-type-icon">${TYPE_ICON[v.vehicle_type] || '<svg width="16" height="16"><use href="#icon-car"/></svg>'}</span>
       <div class="queue-info">
         <div class="queue-number">${v.vehicle_number}</div>
         <div class="queue-meta">
@@ -743,6 +759,6 @@ function startAutoRefresh() {
     // Health check every 30 seconds
     setInterval(checkHealth, 30000);
 
-    console.log('%c🚦 Smart Traffic System — AVL Engine Active', 'color:#00d4ff;font-size:14px;font-weight:bold;');
+    console.log('%c Smart Traffic System — AVL Engine Active', 'color:#00d4ff;font-size:14px;font-weight:bold;');
     console.log('%cO(log n) guaranteed for Insert / Delete / Search', 'color:#2ed573;font-size:12px;');
 })();
