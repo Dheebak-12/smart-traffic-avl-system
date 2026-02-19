@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Traffic Control System — AVL Tree</title>
+  <meta name="description"
+    content="Priority-based Smart Traffic Management System using AVL Tree for efficient O(log n) scheduling of vehicles at junctions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet" />
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- ═══════════════════════════════════════
+       TOAST NOTIFICATION
+  ════════════════════════════════════════ -->
+  <div id="toast" class="toast" role="alert"></div>
+
+  <!-- ═══════════════════════════════════════
+       HEADER
+  ════════════════════════════════════════ -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <div class="logo-icon">🚦</div>
+        <div class="logo-text">
+          <h1>SmartTraffic<span class="logo-accent">AVL</span></h1>
+          <p>Priority-Based Junction Manager</p>
+        </div>
+      </div>
+    </div>
+    <div class="header-center">
+      <div class="live-badge">
+        <span class="live-dot"></span>
+        <span>LIVE SYSTEM</span>
+      </div>
+      <div class="db-status" id="db-status">
+        <span class="status-dot" id="db-dot"></span>
+        <span id="db-label">Connecting...</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="avl-info">
+        <span class="info-badge">AVL Engine</span>
+        <span class="time-badge" id="system-time"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════
+       STATS BAR
+  ════════════════════════════════════════ -->
+  <section class="stats-bar" id="stats-bar">
+    <div class="stat-card" id="stat-queue">
+      <div class="stat-icon">🌳</div>
+      <div class="stat-body">
+        <div class="stat-value" id="stat-in-queue">0</div>
+        <div class="stat-label">In Queue (AVL)</div>
+      </div>
+      <div class="stat-sublabel" id="stat-tree-height">Height: 0</div>
+    </div>
+    <div class="stat-card emergency" id="stat-emergency">
+      <div class="stat-icon">🚨</div>
+      <div class="stat-body">
+        <div class="stat-value" id="stat-emergency-count">0</div>
+        <div class="stat-label">Emergency Vehicles</div>
+      </div>
+      <div class="stat-sublabel">Ambulance / Fire / Police</div>
+    </div>
+    <div class="stat-card" id="stat-passed">
+      <div class="stat-icon">✅</div>
+      <div class="stat-body">
+        <div class="stat-value" id="stat-passed-count">0</div>
+        <div class="stat-label">Vehicles Passed</div>
+      </div>
+      <div class="stat-sublabel" id="stat-avg-wait">Avg wait: 0.0 min</div>
+    </div>
+    <div class="stat-card" id="stat-rotations">
+      <div class="stat-icon">🔄</div>
+      <div class="stat-body">
+        <div class="stat-value" id="stat-rotation-count">0</div>
+        <div class="stat-label">AVL Rotations</div>
+      </div>
+      <div class="stat-sublabel">O(log n) guaranteed</div>
+    </div>
+    <div class="stat-card" id="stat-busiest">
+      <div class="stat-icon">🛣️</div>
+      <div class="stat-body">
+        <div class="stat-value" id="stat-busiest-lane">—</div>
+        <div class="stat-label">Busiest Lane</div>
+      </div>
+      <div class="stat-sublabel" id="stat-busiest-count">0 vehicles</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       MAIN GRID
+  ════════════════════════════════════════ -->
+  <main class="main-grid">
+
+    <!-- LEFT PANEL: Controls -->
+    <aside class="left-panel">
+
+      <!-- Add Vehicle Form -->
+      <div class="card" id="add-vehicle-card">
+        <div class="card-header">
+          <h2>➕ Add Vehicle</h2>
+          <span class="card-badge">Insert O(log n)</span>
+        </div>
+        <form id="add-vehicle-form" class="vehicle-form">
+          <div class="form-group">
+            <label for="vehicle-number">Vehicle Number</label>
+            <div class="input-wrapper">
+              <input type="text" id="vehicle-number" placeholder="e.g. TN01AB1234" maxlength="10" autocomplete="off"
+                required style="font-family:var(--font-mono);letter-spacing:1px;text-transform:uppercase" />
+              <span class="input-status-icon" id="plate-status-icon"></span>
+            </div>
+            <!-- Live plate format hint -->
+            <div class="plate-hint" id="plate-hint">
+              <span class="plate-seg seg-letter" id="ph-s1">LL</span>
+              <span class="plate-sep">·</span>
+              <span class="plate-seg seg-digit" id="ph-s2">NN</span>
+              <span class="plate-sep">·</span>
+              <span class="plate-seg seg-letter" id="ph-s3">LL</span>
+              <span class="plate-sep">·</span>
+              <span class="plate-seg seg-digit" id="ph-s4">NNNN</span>
+              <span class="plate-sep" style="margin-left:4px;font-size:9px;color:var(--text-muted)">L=letter
+                N=digit</span>
+            </div>
+            <div class="validation-msg msg-info" id="plate-validation-msg">Format: TN01AB1234 (2L·2N·2L·4N)</div>
+          </div>
+          <div class="form-group">
+            <label for="vehicle-type">Vehicle Type</label>
+            <select id="vehicle-type" required>
+              <option value="">— Select Type —</option>
+              <option value="Ambulance">🚑 Ambulance (Priority 1)</option>
+              <option value="Fire Truck">🚒 Fire Truck (Priority 2)</option>
+              <option value="Police">🚓 Police (Priority 3)</option>
+              <option value="Bus">🚌 Bus (Priority 4)</option>
+              <option value="Car">🚗 Car (Priority 5)</option>
+              <option value="Bike">🏍️ Bike (Priority 6)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="lane-number">Lane Number</label>
+            <div class="lane-picker" id="lane-picker">
+              <button type="button" class="lane-btn active" data-lane="1" id="lane-btn-1">Lane 1</button>
+              <button type="button" class="lane-btn" data-lane="2" id="lane-btn-2">Lane 2</button>
+              <button type="button" class="lane-btn" data-lane="3" id="lane-btn-3">Lane 3</button>
+              <button type="button" class="lane-btn" data-lane="4" id="lane-btn-4">Lane 4</button>
+            </div>
+            <input type="hidden" id="lane-number" value="1" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="add-vehicle-btn">
+            <span class="btn-icon">🌱</span> Add to AVL Queue
+          </button>
+        </form>
+      </div>
+
+      <!-- Signal Controls -->
+      <div class="card" id="signal-card">
+        <div class="card-header">
+          <h2>🚦 Signal Control</h2>
+          <span class="card-badge">Delete O(log n)</span>
+        </div>
+        <div class="signal-controls">
+          <button class="btn btn-green" id="btn-signal-green" onclick="signalGreen()">
+            <span>🟢</span> Signal Green — Pass Highest Priority
+          </button>
+          <div class="lane-signal-row">
+            <span class="lane-label">Clear by lane:</span>
+            <button class="lane-signal-btn" onclick="signalGreenLane(1)">Lane 1</button>
+            <button class="lane-signal-btn" onclick="signalGreenLane(2)">Lane 2</button>
+            <button class="lane-signal-btn" onclick="signalGreenLane(3)">Lane 3</button>
+            <button class="lane-signal-btn" onclick="signalGreenLane(4)">Lane 4</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Search Vehicle -->
+      <div class="card" id="search-card">
+        <div class="card-header">
+          <h2>🔍 Search Vehicle</h2>
+          <span class="card-badge">Search O(log n)</span>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="search-input" placeholder="Enter vehicle number..." autocomplete="off" />
+          <button class="btn btn-secondary" id="btn-search" onclick="searchVehicle()">Search</button>
+        </div>
+        <div id="search-result" class="search-result hidden"></div>
+      </div>
+
+      <!-- Advanced Controls -->
+      <div class="card" id="advanced-card">
+        <div class="card-header">
+          <h2>⚡ Smart Features</h2>
+        </div>
+        <div class="advanced-controls">
+          <button class="btn btn-warning" onclick="updatePriorities()" id="btn-update-priority">
+            🔥 Dynamic Priority Boost
+          </button>
+          <p class="hint-text">Boosts priority of vehicles waiting &gt;3 minutes (anti-starvation)</p>
+          <div class="divider"></div>
+          <div class="clear-lane-row">
+            <span class="lane-label">🧹 Clear full lane:</span>
+            <button class="btn-clear-lane" onclick="clearLane(1)">1</button>
+            <button class="btn-clear-lane" onclick="clearLane(2)">2</button>
+            <button class="btn-clear-lane" onclick="clearLane(3)">3</button>
+            <button class="btn-clear-lane" onclick="clearLane(4)">4</button>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- CENTER PANEL: AVL Tree Visualization -->
+    <section class="center-panel">
+      <div class="card tree-card">
+        <div class="card-header">
+          <h2>🌳 AVL Tree — Live Visualization</h2>
+          <div class="tree-controls">
+            <button class="tree-view-btn active" onclick="switchTreeView('global')" id="btn-global-tree">Global</button>
+            <button class="tree-view-btn" onclick="switchTreeView(1)" id="btn-lane1-tree">Lane 1</button>
+            <button class="tree-view-btn" onclick="switchTreeView(2)" id="btn-lane2-tree">Lane 2</button>
+            <button class="tree-view-btn" onclick="switchTreeView(3)" id="btn-lane3-tree">Lane 3</button>
+            <button class="tree-view-btn" onclick="switchTreeView(4)" id="btn-lane4-tree">Lane 4</button>
+          </div>
+        </div>
+        <div class="tree-legend">
+          <span class="legend-item"><span class="legend-dot" style="background:#ff4757"></span>Ambulance</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#ff6b35"></span>Fire Truck</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#3742fa"></span>Police</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#ffa502"></span>Bus</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#2ed573"></span>Car</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#1e90ff"></span>Bike</span>
+        </div>
+        <div id="tree-container" class="tree-container">
+          <div class="tree-empty">
+            <div class="tree-empty-icon">🌱</div>
+            <p>AVL Tree is empty — Add vehicles to see the tree</p>
+          </div>
+        </div>
+        <div class="tree-analytics">
+          <span class="analytics-item" id="analytics-height">Height: 0</span>
+          <span class="analytics-sep">|</span>
+          <span class="analytics-item" id="analytics-nodes">Nodes: 0</span>
+          <span class="analytics-sep">|</span>
+          <span class="analytics-item" id="analytics-rotations">Rotations: 0</span>
+          <span class="analytics-sep">|</span>
+          <span class="analytics-item complexity">O(log n) guaranteed</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL: Traffic Queue -->
+    <aside class="right-panel">
+      <div class="card queue-card">
+        <div class="card-header">
+          <h2>📋 Traffic Queue</h2>
+          <span class="card-badge" id="queue-count">0 waiting</span>
+        </div>
+        <div id="queue-view-selector" class="queue-view-selector">
+          <button class="queue-view-btn active" onclick="switchQueueView('all')" id="qv-all">All</button>
+          <button class="queue-view-btn" onclick="switchQueueView(1)" id="qv-1">L1</button>
+          <button class="queue-view-btn" onclick="switchQueueView(2)" id="qv-2">L2</button>
+          <button class="queue-view-btn" onclick="switchQueueView(3)" id="qv-3">L3</button>
+          <button class="queue-view-btn" onclick="switchQueueView(4)" id="qv-4">L4</button>
+        </div>
+        <div class="queue-list" id="queue-list">
+          <div class="queue-empty">No vehicles waiting</div>
+        </div>
+      </div>
+
+      <!-- Lane Density -->
+      <div class="card lane-density-card">
+        <div class="card-header">
+          <h2>📊 Lane Density</h2>
+        </div>
+        <div class="lane-bars" id="lane-bars">
+          <div class="lane-bar-row" id="lane-bar-1">
+            <span class="lane-bar-label">Lane 1</span>
+            <div class="lane-bar-track">
+              <div class="lane-bar-fill" id="lane-fill-1"></div>
+            </div>
+            <span class="lane-bar-count" id="lane-count-1">0</span>
+          </div>
+          <div class="lane-bar-row" id="lane-bar-2">
+            <span class="lane-bar-label">Lane 2</span>
+            <div class="lane-bar-track">
+              <div class="lane-bar-fill" id="lane-fill-2"></div>
+            </div>
+            <span class="lane-bar-count" id="lane-count-2">0</span>
+          </div>
+          <div class="lane-bar-row" id="lane-bar-3">
+            <span class="lane-bar-label">Lane 3</span>
+            <div class="lane-bar-track">
+              <div class="lane-bar-fill" id="lane-fill-3"></div>
+            </div>
+            <span class="lane-bar-count" id="lane-count-3">0</span>
+          </div>
+          <div class="lane-bar-row" id="lane-bar-4">
+            <span class="lane-bar-label">Lane 4</span>
+            <div class="lane-bar-track">
+              <div class="lane-bar-fill" id="lane-fill-4"></div>
+            </div>
+            <span class="lane-bar-count" id="lane-count-4">0</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- ═══════════════════════════════════════
+       BOTTOM SECTION: DB Records + Logs
+  ════════════════════════════════════════ -->
+  <section class="bottom-grid">
+
+    <!-- Database Records -->
+    <div class="card db-card">
+      <div class="card-header">
+        <h2>🗄️ Database Records (PostgreSQL)</h2>
+        <button class="btn btn-sm btn-secondary" onclick="loadDbRecords()" id="btn-refresh-db">
+          ↻ Refresh
+        </button>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table" id="db-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Vehicle #</th>
+              <th>Type</th>
+              <th>Priority</th>
+              <th>Lane</th>
+              <th>Arrival</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="db-table-body">
+            <tr>
+              <td colspan="7" class="table-empty">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Activity Logs -->
+    <div class="card logs-card">
+      <div class="card-header">
+        <h2>📝 Activity Logs</h2>
+        <button class="btn btn-sm btn-secondary" onclick="loadLogs()" id="btn-refresh-logs">
+          ↻ Refresh
+        </button>
+      </div>
+      <div class="logs-list" id="logs-list">
+        <div class="log-empty">No activity yet</div>
+      </div>
+    </div>
+
+  </section>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
