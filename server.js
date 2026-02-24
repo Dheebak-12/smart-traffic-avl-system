@@ -127,7 +127,7 @@ app.post('/api/vehicles', async (req, res) => {
             vehicle_number: cleanNum,
             vehicle_type,
             priority,
-            arrival_time: new Date().toISOString(),
+            arrival_time: new Date(),
             lane_number: lane,
             status: 'waiting'
         };
@@ -344,13 +344,25 @@ app.post('/api/vehicles/update-priority', async (req, res) => {
         const updated = [];
 
         for (const vehicle of queue) {
-            const waitMinutes = (Date.now() - new Date(vehicle.arrival_time).getTime()) / 60000;
-            const boost = Math.floor(waitMinutes / 3);
-            const newPriority = Math.max(1, vehicle.priority - boost);
+            // "Time Skip" Logic for Manual Button:
+            // Shift arrival time back by 3 minutes to "pre-age" the vehicle
+            const oldTime = new Date(vehicle.arrival_time);
+            const newTime = new Date(oldTime.getTime() - (3 * 60 * 1000));
 
-            if (newPriority < vehicle.priority) {
+            // Calculate what the priority SHOULD be after this time skip
+            const waitMinutes = (Date.now() - newTime.getTime()) / 60000;
+            const boost = Math.floor(waitMinutes / 3);
+            const basePriority = PRIORITY_MAP[vehicle.vehicle_type] || vehicle.priority;
+            const targetPriority = Math.max(1, basePriority - boost);
+
+            // Force at least 1 level improvement if the user clicked the manual button (unless at P1)
+            const finalPriority = (targetPriority === vehicle.priority && vehicle.priority > 1)
+                ? vehicle.priority - 1
+                : targetPriority;
+
+            if (finalPriority < vehicle.priority || newTime.getTime() !== oldTime.getTime()) {
                 globalTree.deleteVehicle(vehicle);
-                const boosted = { ...vehicle, priority: newPriority };
+                const boosted = { ...vehicle, priority: finalPriority, arrival_time: newTime };
                 globalTree.insertVehicle(boosted);
 
                 const laneTree = laneTrees[vehicle.lane_number];
@@ -360,15 +372,16 @@ app.post('/api/vehicles/update-priority', async (req, res) => {
                 }
 
                 try {
-                    await db.updateVehiclePriority(vehicle.id, newPriority);
-                    await db.addLog(vehicle.id, 'PRIORITY_BOOSTED',
-                        `Priority boosted ${vehicle.priority} → ${newPriority} for ${vehicle.vehicle_number} (waited ${waitMinutes.toFixed(1)} min)`);
+                    // Update both priority AND arrival_time in DB
+                    await db.updateVehiclePriority(vehicle.id, finalPriority, newTime);
+                    await db.addLog(vehicle.id, 'MANUAL_BOOST',
+                        `Manual Boost: P${vehicle.priority} → P${finalPriority} | Time skipped 3m back`);
                 } catch (e) { }
 
                 updated.push({
                     vehicle_number: vehicle.vehicle_number,
                     old_priority: vehicle.priority,
-                    new_priority: newPriority,
+                    new_priority: finalPriority,
                     wait_minutes: waitMinutes.toFixed(1)
                 });
             }
@@ -448,28 +461,33 @@ async function runAutoPriorityBoost() {
     for (const vehicle of queue) {
         const waitMinutes = (Date.now() - new Date(vehicle.arrival_time).getTime()) / 60000;
         const boost = Math.floor(waitMinutes / 3);         // 1 level per 3 mins waited
-        const newPriority = Math.max(1, vehicle.priority - boost); // never below P1
 
-        if (newPriority < vehicle.priority) {
+        // Fix: Use base priority from mapping to avoid double-boosting
+        const basePriority = PRIORITY_MAP[vehicle.vehicle_type] || vehicle.priority;
+        const targetPriority = Math.max(1, basePriority - boost);
+
+        if (targetPriority < vehicle.priority) {
+            const oldPriority = vehicle.priority;
+
             // ── Remove from both trees at OLD priority ──
             globalTree.deleteVehicle(vehicle);
             const lt = laneTrees[vehicle.lane_number];
             if (lt) lt.deleteVehicle(vehicle);
 
             // ── Re-insert at NEW (boosted) priority ──
-            const boosted = { ...vehicle, priority: newPriority };
+            const boosted = { ...vehicle, priority: targetPriority };
             globalTree.insertVehicle(boosted);
             if (lt) lt.insertVehicle(boosted);
 
             // ── Persist to DB + log ──
             try {
-                await db.updateVehiclePriority(vehicle.id, newPriority);
+                await db.updateVehiclePriority(vehicle.id, targetPriority);
                 await db.addLog(vehicle.id, 'PRIORITY_BOOSTED',
-                    `Auto-boost: ${vehicle.vehicle_number} P${vehicle.priority} → P${newPriority} | waited ${waitMinutes.toFixed(1)} min`);
+                    `Auto-boost: ${vehicle.vehicle_number} P${oldPriority} → P${targetPriority} | waited ${waitMinutes.toFixed(1)} min`);
             } catch (e) { /* DB optional */ }
 
             boostedCount++;
-            console.log(`  [Auto-Boost] ${vehicle.vehicle_number} (${vehicle.vehicle_type}): P${vehicle.priority} → P${newPriority} | waited ${waitMinutes.toFixed(1)} min`);
+            console.log(`  [Auto-Boost] ${vehicle.vehicle_number} (${vehicle.vehicle_type}): P${oldPriority} → P${targetPriority} | waited ${waitMinutes.toFixed(1)} min`);
         }
     }
 
